@@ -8,3 +8,10 @@ __pycache__/
 .env
 .env.*
 *.tfvars
+.terraform*
+terraform.tfstate*
+terraform.*
+
+# Ignore misc files
+locals.tf
+lambda_main.zip

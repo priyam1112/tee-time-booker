@@ -1,9 +1,9 @@
-variable "aws_access_key" {
+variable "AWS_ACCESS_KEY" {
   type    = string
   default = ""
 }
 
-variable "aws_secret_key" {
+variable "AWS_SECRET_KEY" {
   type    = string
   default = ""
 }
@@ -23,4 +23,9 @@ variable "short_region" {
   description = "Abbreviation of subscription resources location, e.g. scus, east2, etc."
 }
 
+variable "function_schedule" {
+  description = "The schedule expression for the Lambda function"
+  type        = string
+  default     = "cron(59 19 ? JUL,AUG,SEP 4/7 2023)" # Each Wednesday in August, July and September 2023 @ 19:59:55
+}
 

@@ -1,10 +1,11 @@
 import logging
 import os
-from dotenv import load_dotenv
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 from bs4 import BeautifulSoup
 from selenium import webdriver
+#from dotenv import load_dotenv
 
 # Set logging to gauge when program should be scheduled to start
 logging.basicConfig(
@@ -15,7 +16,6 @@ logging.basicConfig(
         logging.FileHandler("logfile.log")
     ]
 )
-
 
 # getPHPSessionID(), getOtherCookies(), getCSRFToken() are separately accessed to
 # store the necessary cookies for login from the various BRS Golf domains
@@ -51,7 +51,7 @@ def getCSRFToken(session, url):
     return csrf_token
 
 
-def getTimeSheet(session, csrf_token):
+def getTimeSheet(session, csrf_token, username, password, club_name):
 
     # Perform the login and obtain the necessary authentication token or cookies
     login_url = f'https://members.brsgolf.com/{club_name}/login'
@@ -276,20 +276,24 @@ def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", play
             response = None
 
     return response
+
+
+def lambda_handler(event, context):
+
+    time.sleep(48)
     
-
-if __name__ == "__main__":
-
     logging.info("Script started at: %s", datetime.now())
 
-    # Use environment vars to protect secrets
-    load_dotenv()
+    today = datetime.now().date()
+    # Add 7 days to today's date
+    tee_time_date = today + timedelta(days=7)
+    tee_time_preferences = os.environ.get(tee_time_date, "").split(",")
     username = os.environ['BRS_USERNAME']
     password = os.environ['BRS_PASSWORD']
     player_1 = os.environ['PLAYER_1']
     player_2 = os.environ['PLAYER_2']
     player_3 = os.environ['PLAYER_3']
-    player_4 = os.environ['PLAYER_4']
+    player_4 = os.environ.get('PLAYER_4', "")
     club_name = os.environ['CLUB_NAME']
 
     session = requests.Session()
@@ -299,15 +303,11 @@ if __name__ == "__main__":
     club_members_brs_url = f'https://members.brsgolf.com/'
     club_login_brs_url = f'https://members.brsgolf.com/{club_name}/login'
 
-    # Prefs
-    tee_time_preferences = ["12:50", "13:00", "20:00"]
-    tee_time_date = '2023/07/24'
-
     getPHPSessionID(session, club_brs_url)
     getOtherCookies(session, club_members_brs_url)
     csrf_token = getCSRFToken(session, club_login_brs_url)
-    getTimeSheet(session, csrf_token)
+    getTimeSheet(session, csrf_token, username, password, club_name)
     dynamic_html = getDynamicHTML(tee_time_date)
     available_tee_times_hrefs = hrefParser(dynamic_html, tee_time_preferences)
     booking_tokens = bookingSlotTokens(session, available_tee_times_hrefs)
-    response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1)
+    response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1, player_2, player_3)
