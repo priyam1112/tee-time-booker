@@ -2,9 +2,11 @@ import logging
 import os
 from dotenv import load_dotenv
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.webdriver.common.by import By
+
 
 # Set logging to gauge when program should be scheduled to start
 logging.basicConfig(
@@ -20,7 +22,6 @@ logging.basicConfig(
 # getPHPSessionID(), getOtherCookies(), getCSRFToken() are separately accessed to
 # store the necessary cookies for login from the various BRS Golf domains
 def getPHPSessionID(session, url):
-    
     session.get(url)
 
     # print('getPHPSessionID() Cookies *****************')
@@ -28,31 +29,39 @@ def getPHPSessionID(session, url):
 
 
 def getOtherCookies(session, url):
-    
     session.get(url)
 
-    #print('getOtherCookies() Cookies *****************')
+    # print('getOtherCookies() Cookies *****************')
     # print(session.cookies)
     # print('\n')
 
+
 def getCSRFToken(session, url):
-    
-    
-    response = session.get(url)
-
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/115.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    response = session.get(url, headers=headers)
+    #print("response", response.text)
     soup = BeautifulSoup(response.content, 'html.parser')
-    csrf_token = soup.find('input', {'name': 'login_form[_token]'})['value']
+    csrf_token_tag = soup.find('input', {'name': 'login_form[_token]'})
+    if csrf_token_tag:
+        csrf_token = csrf_token_tag['value']
+    else:
+        raise RuntimeError("Could not find CSRF token in login form. Page HTML:\n" + soup.prettify())
 
-    #print('getOtherCookies() Cookies *****************')
+    # print('getOtherCookies() Cookies *****************')
     # print(session.cookies)
-    #print('CSRF token: ' + csrf_token)
+    # print('CSRF token: ' + csrf_token)
     # print('\n')
 
     return csrf_token
 
 
 def getTimeSheet(session, csrf_token):
-
     # Perform the login and obtain the necessary authentication token or cookies
     login_url = f'https://members.brsgolf.com/{club_name}/login'
 
@@ -64,23 +73,23 @@ def getTimeSheet(session, csrf_token):
     }
 
     headers = {
-    'authority': 'members.brsgolf.com:',
-    'method': 'POST',
-    'path': f'/{club_name}/login',
-    'scheme': 'https',
-    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'accept-encoding': 'gzip, deflate, br',
-    'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
-    'cache-control': 'max-age=0',
-    'content-type': 'application/x-www-form-urlencoded',
-    'origin': 'https://members.brsgolf.com',
-    'referer': f'https://members.brsgolf.com/{club_name}/login'
+        'authority': 'members.brsgolf.com:',
+        'method': 'POST',
+        'path': f'/{club_name}/login',
+        'scheme': 'https',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-encoding': 'gzip, deflate, br',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'cache-control': 'max-age=0',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://members.brsgolf.com',
+        'referer': f'https://members.brsgolf.com/{club_name}/login'
     }
 
     try:
         response = session.post(login_url, headers=headers, data=payload)
         response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
-    
+
         # Check if the login was successful and retrieve the necessary authentication information
         if response.status_code == 200:
             print('<--- LOGIN SUCCESSFUL! --->')
@@ -91,9 +100,10 @@ def getTimeSheet(session, csrf_token):
             print('Login failed.')
             print(response.status_code)
             print(response.reason)
-            
+
     except requests.exceptions.RequestException as e:
         print('An error occurred during login:', e)
+
 
 # Selenium webdriver is required to access token values and other identifiers that are generated
 # via Javascript and hiddden in the HTML page source. Other libraries could not render the Javascript
@@ -101,7 +111,6 @@ def getTimeSheet(session, csrf_token):
 #
 # The key value needed is a href for each booking slot that contains a dynamically generated token
 def getDynamicHTML(date):
-
     url = f'https://members.brsgolf.com/{club_name}/tee-sheet/1/{date}'
 
     # Create a new Chrome browser instance using Selenium
@@ -115,7 +124,7 @@ def getDynamicHTML(date):
 
     # Convert CookieJar to Selenium's dictionary format
     cookies_dict = {}
-    
+
     for cookie in session.cookies:
         # Omit cookie expiry property if the cookie is a session cookie
         if cookie.expires == None:
@@ -137,12 +146,13 @@ def getDynamicHTML(date):
             }
 
         driver.add_cookie(cookies_dict[cookie.name])
-    
+
     # Give time for all HTML to load, otherwise it is intermittently missed
-    driver.implicitly_wait(3)
+    driver.implicitly_wait(10)
 
     # Navigate to the webpage using Selenium
     driver.get(url)
+    driver.find_elements(By.CSS_SELECTOR, "tr.bg-white.even\\:bg-grey-faded")
 
     # Get the page source after JavaScript execution
     page_source = driver.page_source
@@ -152,9 +162,10 @@ def getDynamicHTML(date):
 
     return page_source
 
-def hrefParser(dynamic_html, tee_time_preferences):
 
+def hrefParser(dynamic_html, tee_time_preferences):
     soup = BeautifulSoup(dynamic_html, "html.parser")
+
 
     # Find the all timesheet rows
     tr_elements = soup.find_all("tr", class_="bg-white even:bg-grey-faded")
@@ -176,7 +187,7 @@ def hrefParser(dynamic_html, tee_time_preferences):
                     if 'Holes' in div_element.text:
                         tee_time_available = False
                 # If 'Holes' isn't in the table row then all 4 slots available
-                if tee_time_available:           
+                if tee_time_available:
                     # Find the anchor tag and extract its href value
                     anchor_tag = tr_element.find('a')
                     if anchor_tag and 'href' in anchor_tag.attrs:
@@ -188,8 +199,8 @@ def hrefParser(dynamic_html, tee_time_preferences):
 
     return available_tee_times_hrefs
 
-def bookingSlotTokens(session, available_tee_times_hrefs):
 
+def bookingSlotTokens(session, available_tee_times_hrefs):
     tokens_array = []  # Create an empty array to store the tokens
 
     for hrefs in available_tee_times_hrefs:
@@ -200,37 +211,35 @@ def bookingSlotTokens(session, available_tee_times_hrefs):
         try:
             response = session.get(url)
             response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
+            response_content = response.content
 
+            soup = BeautifulSoup(response_content, 'html.parser')
+            token_1 = soup.find('input', {'name': '_token'})['value']
+            #token_2 = soup.find('input', {'name': '_token'})['value']
 
-            soup = BeautifulSoup(response.content, 'html.parser')
-            token_1 = soup.find('input', {'name': 'member_booking_form[token]'})['value']     
-            token_2 = soup.find('input', {'name': 'member_booking_form[_token]'})['value']
-        
             # Add the tokens to the array
             tokens_array_inner.append(token_1)
-            tokens_array_inner.append(token_2)
+            #tokens_array_inner.append(token_2)
             tokens_array.append(tokens_array_inner)
 
             # print('MEMBER TOKENS......................')
             # print(tokens_array)
-        
+
         except requests.exceptions.RequestException as e:
             print(f"An error occurred while fetching tokens for {url}: {e}")
 
     # Optionally, you may want to log the extracted tokens
     logging.info("Tokens array: %s", tokens_array)
-    
+
     return tokens_array
 
 
 def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", player_4=""):
-    
     i = 0
     status_code = 0
     response = None
 
     logging.info("Reaching bookTeeTime while loop...")
-
 
     # Tries to book initial time slot (href), if it fails, it then tries the 2nd, and so on.
     # hrefs array can only be max length of three, so it will only try three times at most.
@@ -242,21 +251,17 @@ def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", play
         url = f"https://members.brsgolf.com/{club_name}/bookings/store/1/{date}/{time}"
 
         payload = {
-            f'member_booking_form[token]': {tokens[i][0]},
-            'member_booking_form[holes]': '18',
-            f'member_booking_form[player_1]': {player_1},
-            f'member_booking_form[player_2]': {player_2},
-            'member_booking_form[guest-rate-2]': '',
-            f'member_booking_form[player_3]': {player_3},
-            'member_booking_form[guest-rate-3]': '',
-            f'member_booking_form[player_4]': {player_4},
-            'member_booking_form[guest-rate-4]': '',
-            'member_booking_form[vendor-tx-code]': '',
-            f'member_booking_form[_token]': {tokens[i][1]}
+            f'_token': {tokens[i][0]},
+            'member_booking_form[holes]': 18,
+            'member_booking_form[player_1]': player_1,
+            'member_booking_form[player_2]': player_2,
+            'member_booking_form[player_3]': player_3,
+            'member_booking_form[player_4]': player_4,
+            'member_booking_form[vendor-tx-code]': ''
         }
 
         # For whatever reason, a successful request requires an empty files array
-        files=[]
+        files = []
 
         try:
 
@@ -270,16 +275,15 @@ def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", play
             # Optionally, log the response content for debugging
             # print(response.status_code)
             # print(response.content)
-        
+
         except requests.exceptions.RequestException as e:
             print(f"An error occurred during the booking attempt: {e}")
             response = None
 
     return response
-    
+
 
 if __name__ == "__main__":
-
     logging.info("Script started at: %s", datetime.now())
 
     # Use environment vars to protect secrets
@@ -292,22 +296,38 @@ if __name__ == "__main__":
     player_4 = os.environ['PLAYER_4']
     club_name = os.environ['CLUB_NAME']
 
-    session = requests.Session()
 
     # URLs
     club_brs_url = f'https://brsgolf.com/{club_name}'
     club_members_brs_url = f'https://members.brsgolf.com/'
     club_login_brs_url = f'https://members.brsgolf.com/{club_name}/login'
 
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/115.0 Safari/537.36",
+        "Referer": club_login_brs_url,
+    })
+
     # Prefs
-    tee_time_preferences = ["12:50", "13:00", "20:00"]
-    tee_time_date = '2023/07/24'
+    tee_time_preferences = ["09:15", "09:37", "10:15", "10:37", "15:15", "15:22"]
+    # tee_time_date = '2025/08/23'
+    tee_time_date = (datetime.today() + timedelta(days=5)).strftime("%Y/%m/%d")
 
     getPHPSessionID(session, club_brs_url)
+    print("got PHP session ID")
     getOtherCookies(session, club_members_brs_url)
+    print("got cookies")
     csrf_token = getCSRFToken(session, club_login_brs_url)
+    print("got csrf token")
     getTimeSheet(session, csrf_token)
+    print("get timesheet")
     dynamic_html = getDynamicHTML(tee_time_date)
+    print("get dynamic_html")
     available_tee_times_hrefs = hrefParser(dynamic_html, tee_time_preferences)
+    print("get available_tee_times_hrefs", available_tee_times_hrefs)
     booking_tokens = bookingSlotTokens(session, available_tee_times_hrefs)
-    response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1)
+    print("get booking_tokens", booking_tokens)
+    response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1, player_2, player_3, player_4)
+    print(" bookTeeTime response ", response)
