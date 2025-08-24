@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from dotenv import load_dotenv
 import requests
 from datetime import datetime, timedelta
@@ -92,7 +93,7 @@ def getTimeSheet(session, csrf_token):
 
         # Check if the login was successful and retrieve the necessary authentication information
         if response.status_code == 200:
-            print('<--- LOGIN SUCCESSFUL! --->')
+            logging.info('<--- LOGIN SUCCESSFUL! --->')
             # print('TEE TIME REFS......................')
             # print(session.cookies)
 
@@ -311,23 +312,49 @@ if __name__ == "__main__":
     })
 
     # Prefs
-    tee_time_preferences = ["09:15", "09:37", "10:15", "10:37", "15:15", "15:22"]
+
+    tee_time_preferences = ["08:22", "08:30", "08:37", "08:45", "08:52", "09:22", "16:22", "16:30", "16:37", "16:45", "16:52", "18:30"]
     # tee_time_date = '2025/08/23'
     tee_time_date = (datetime.today() + timedelta(days=5)).strftime("%Y/%m/%d")
-
+    logging.info("Booking date is %s ", tee_time_date)
+    # Run continuously until success
+    booking_success = False
+    attempt = 0
     getPHPSessionID(session, club_brs_url)
-    print("got PHP session ID")
+    logging.info("got PHP session ID")
     getOtherCookies(session, club_members_brs_url)
-    print("got cookies")
+    logging.info("got cookies")
     csrf_token = getCSRFToken(session, club_login_brs_url)
-    print("got csrf token")
+    logging.info("got csrf token")
     getTimeSheet(session, csrf_token)
-    print("get timesheet")
-    dynamic_html = getDynamicHTML(tee_time_date)
-    print("get dynamic_html")
-    available_tee_times_hrefs = hrefParser(dynamic_html, tee_time_preferences)
-    print("get available_tee_times_hrefs", available_tee_times_hrefs)
-    booking_tokens = bookingSlotTokens(session, available_tee_times_hrefs)
-    print("get booking_tokens", booking_tokens)
-    response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1, player_2, player_3, player_4)
-    print(" bookTeeTime response ", response)
+    logging.info("get timesheet")
+    while not booking_success:
+        attempt += 1
+        logging.info("Attempt #%s at %s", attempt, datetime.now())
+        try:
+
+            available_tee_times_hrefs = []
+
+            dynamic_html = getDynamicHTML(tee_time_date)
+            logging.info("get dynamic_html ")
+            available_tee_times_hrefs = hrefParser(dynamic_html, tee_time_preferences)
+
+            if not available_tee_times_hrefs:
+                logging.info("No tee times found. Retrying in 2s...")
+                time.sleep(1)
+                continue
+            logging.info("get available_tee_times_hrefs %s", available_tee_times_hrefs)
+            booking_tokens = bookingSlotTokens(session, available_tee_times_hrefs)
+            logging.info("get booking_tokens %s", booking_tokens)
+            response = bookTeeTime(session, available_tee_times_hrefs, booking_tokens, player_1, player_2, player_3, player_4)
+            if response and response.status_code == 200:
+                logging.info(" bookTeeTime response %s", response)
+                booking_success = True
+            else:
+                logging.info("Booking failed (status: %s). Retrying in 2s...",
+                             response.status_code if response else "None")
+                time.sleep(2)
+
+        except Exception as e:
+            logging.error("Error during attempt #%s: %s", attempt, e, exc_info=True)
+            time.sleep(3)
