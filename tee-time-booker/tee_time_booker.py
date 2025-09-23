@@ -1,15 +1,17 @@
 import logging
 import os
 import time
-from dotenv import load_dotenv
-import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+
+import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-
-# Set logging to gauge when program should be scheduled to start
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -111,15 +113,11 @@ def getTimeSheet(session, csrf_token):
 # properly; hence, it was a last resort.
 #
 # The key value needed is a href for each booking slot that contains a dynamically generated token
-def getDynamicHTML(date):
+def getDynamicHTML(date, driver):
     url = f'https://members.brsgolf.com/{club_name}/tee-sheet/1/{date}'
-
     # Create a new Chrome browser instance using Selenium
-    driver = webdriver.Chrome()
-
     # Initial page load to pull down and align cookie domains
     driver.get(url)
-
     # delete the current cookies
     driver.delete_all_cookies()
 
@@ -147,21 +145,22 @@ def getDynamicHTML(date):
             }
 
         driver.add_cookie(cookies_dict[cookie.name])
-
     # Give time for all HTML to load, otherwise it is intermittently missed
-    driver.implicitly_wait(10)
+    #driver.implicitly_wait(10)
 
     # Navigate to the webpage using Selenium
-    driver.get(url)
-    driver.find_elements(By.CSS_SELECTOR, "tr.bg-white.even\\:bg-grey-faded")
-
+    #driver.get(url)
+    #driver.find_elements(By.CSS_SELECTOR, "tr.bg-white.even\\:bg-grey-faded")
     # Get the page source after JavaScript execution
-    page_source = driver.page_source
-
-    # Close the browser
-    driver.quit()
-
-    return page_source
+    # page_source = driver.page_source
+    try:
+        # wait only for the table rows you need, not 10s blind wait
+        WebDriverWait(driver, 2).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "tr.bg-white.even\\:bg-grey-faded"))
+        )
+    except:
+        pass
+    return driver.page_source
 
 
 def hrefParser(dynamic_html, tee_time_preferences):
@@ -200,40 +199,34 @@ def hrefParser(dynamic_html, tee_time_preferences):
 
     return available_tee_times_hrefs
 
+def fetch_token(session, href):
+    """Fetch a token from a single tee time href."""
+    url = f'https://members.brsgolf.com{href}'
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        token_1 = soup.find('input', {'name': '_token'})['value']
+        return [token_1]   # keep list structure as in original
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error fetching tokens for {url}: {e}")
+        return []
 
 def bookingSlotTokens(session, available_tee_times_hrefs):
-    tokens_array = []  # Create an empty array to store the tokens
+    tokens_array = []
 
-    for hrefs in available_tee_times_hrefs:
+    # Use parallelism = size of available_tee_times_hrefs
+    with ThreadPoolExecutor(max_workers=len(available_tee_times_hrefs)) as executor:
+        future_to_href = {executor.submit(fetch_token, session, href): href for href in available_tee_times_hrefs}
 
-        tokens_array_inner = []
-        url = f'https://members.brsgolf.com{hrefs}'
+        for future in as_completed(future_to_href):
+            result = future.result()
+            if result:
+                tokens_array.append(result)
 
-        try:
-            response = session.get(url)
-            response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
-            response_content = response.content
-
-            soup = BeautifulSoup(response_content, 'html.parser')
-            token_1 = soup.find('input', {'name': '_token'})['value']
-            #token_2 = soup.find('input', {'name': '_token'})['value']
-
-            # Add the tokens to the array
-            tokens_array_inner.append(token_1)
-            #tokens_array_inner.append(token_2)
-            tokens_array.append(tokens_array_inner)
-
-            # print('MEMBER TOKENS......................')
-            # print(tokens_array)
-
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred while fetching tokens for {url}: {e}")
-
-    # Optionally, you may want to log the extracted tokens
     logging.info("Tokens array: %s", tokens_array)
-
     return tokens_array
-
 
 def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", player_4=""):
     i = 0
@@ -269,7 +262,7 @@ def bookTeeTime(session, hrefs, tokens, player_1, player_2="", player_3="", play
             logging.info("Sending POST request for %s", url)
 
             response = session.post(url, data=payload, files=files)
-
+            logging.info("POST response %s", response)
             i += 1
             status_code = response.status_code
 
@@ -313,7 +306,7 @@ if __name__ == "__main__":
 
     # Prefs
 
-    tee_time_preferences = ["08:22", "08:30", "08:37", "08:45", "08:52", "09:22", "16:22", "16:30", "16:37", "16:45", "16:52", "18:30"]
+    tee_time_preferences = ["08:15","08:30","08:37","08:45","08:52"]
     # tee_time_date = '2025/08/23'
     tee_time_date = (datetime.today() + timedelta(days=5)).strftime("%Y/%m/%d")
     logging.info("Booking date is %s ", tee_time_date)
@@ -328,20 +321,19 @@ if __name__ == "__main__":
     logging.info("got csrf token")
     getTimeSheet(session, csrf_token)
     logging.info("get timesheet")
+    driver = webdriver.Chrome()
     while not booking_success:
         attempt += 1
         logging.info("Attempt #%s at %s", attempt, datetime.now())
         try:
 
             available_tee_times_hrefs = []
-
-            dynamic_html = getDynamicHTML(tee_time_date)
+            dynamic_html = getDynamicHTML(tee_time_date,driver=driver)
             logging.info("get dynamic_html ")
             available_tee_times_hrefs = hrefParser(dynamic_html, tee_time_preferences)
 
             if not available_tee_times_hrefs:
-                logging.info("No tee times found. Retrying in 2s...")
-                time.sleep(1)
+                logging.info("No tee times found. Retrying again...")
                 continue
             logging.info("get available_tee_times_hrefs %s", available_tee_times_hrefs)
             booking_tokens = bookingSlotTokens(session, available_tee_times_hrefs)
@@ -353,8 +345,9 @@ if __name__ == "__main__":
             else:
                 logging.info("Booking failed (status: %s). Retrying in 2s...",
                              response.status_code if response else "None")
-                time.sleep(2)
+                time.sleep(1)
 
         except Exception as e:
             logging.error("Error during attempt #%s: %s", attempt, e, exc_info=True)
             time.sleep(3)
+    driver.quit()
