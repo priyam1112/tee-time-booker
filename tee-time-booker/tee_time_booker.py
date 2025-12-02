@@ -306,7 +306,7 @@ if __name__ == "__main__":
 
     # Prefs
 
-    tee_time_preferences = ["08:15","08:30","08:37","08:45","08:52"]
+    tee_time_preferences = ["08:24","08:30","08:36","08:42","08:48","08:54"]
     # tee_time_date = '2025/08/23'
     tee_time_date = (datetime.today() + timedelta(days=5)).strftime("%Y/%m/%d")
     logging.info("Booking date is %s ", tee_time_date)
